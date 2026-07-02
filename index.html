@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>3D Smash Game</title>
+<style>
+body { margin:0; overflow:hidden; background:#111; font-family:Arial; }
+#ui {
+  position:fixed; top:15px; left:15px; z-index:10;
+  color:white; background:rgba(0,0,0,.55);
+  padding:12px 16px; border-radius:12px; line-height:1.5;
+}
+</style>
+</head>
+<body>
+
+<div id="ui">
+<b>3D SMASH</b><br>
+Click object = punch that spot<br>
+Drag = rotate camera<br>
+Scroll = zoom<br>
+R = reset
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+let scene, camera, renderer, controls;
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+let blocks = [];
+let falling = [];
+let clock = new THREE.Clock();
+
+const floorY = -3;
+const gravity = -9.8;
+
+init();
+reset();
+animate();
+
+function init() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x111118);
+
+  camera = new THREE.PerspectiveCamera(65, innerWidth / innerHeight, 0.1, 100);
+  camera.position.set(5, 4, 7);
+
+  renderer = new THREE.WebGLRenderer({ antialias:true });
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.shadowMap.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  controls = new OrbitControls(camera, renderer.domElement);
+  controls.enableDamping = true;
+  controls.target.set(0, 0, 0);
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.45));
+
+  const light = new THREE.DirectionalLight(0xffffff, 2);
+  light.position.set(5, 8, 5);
+  light.castShadow = true;
+  scene.add(light);
+
+  const floor = new THREE.Mesh(
+    new THREE.BoxGeometry(20, .3, 20),
+    new THREE.MeshStandardMaterial({ color:0x222222 })
+  );
+  floor.position.y = floorY - .2;
+  floor.receiveShadow = true;
+  scene.add(floor);
+
+  window.addEventListener("pointerdown", punch);
+  window.addEventListener("keydown", e => {
+    if (e.key.toLowerCase() === "r") reset();
+  });
+
+  window.addEventListener("resize", () => {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+}
+
+function reset() {
+  for (const b of blocks) scene.remove(b.mesh);
+  for (const b of falling) scene.remove(b.mesh);
+
+  blocks = [];
+  falling = [];
+
+  const size = .418;
+  const gap = .01;
+
+  for (let x = -3; x <= 3; x++) {
+    for (let y = -3; y <= 4; y++) {
+      for (let z = -2; z <= 2; z++) {
+        const mesh = new THREE.Mesh(
+          new THREE.BoxGeometry(size, size, size),
+          new THREE.MeshStandardMaterial({
+            color: new THREE.Color().setHSL(0.57 + y * .02, .7, .5),
+            roughness: .55
+          })
+        );
+
+        mesh.position.set(
+          x * (size + gap),
+          y * (size + gap),
+          z * (size + gap)
+        );
+
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+
+        blocks.push({
+          mesh,
+          health: 1,
+          attached: true,
+          velocity: new THREE.Vector3(),
+          spin: new THREE.Vector3()
+        });
+      }
+    }
+  }
+}
+
+function punch(e) {
+  mouse.x = (e.clientX / innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+
+  raycaster.setFromCamera(mouse, camera);
+
+  const hittable = blocks.filter(b => b.attached).map(b => b.mesh);
+  const hits = raycaster.intersectObjects(hittable);
+
+  if (!hits.length) return;
+
+  const hitPoint = hits[0].point;
+  const punchDir = raycaster.ray.direction.clone().normalize();
+
+  const radius = .9;
+  const power = 8;
+
+  for (const b of blocks) {
+    if (!b.attached) continue;
+
+    const d = b.mesh.position.distanceTo(hitPoint);
+
+    if (d < radius) {
+      const strength = 1 - d / radius;
+      b.health -= strength;
+
+      b.mesh.scale.multiplyScalar(.96);
+
+      if (b.health <= 0) {
+        b.attached = false;
+
+        const outward = b.mesh.position.clone().sub(hitPoint).normalize();
+
+        b.velocity.copy(punchDir)
+          .multiplyScalar(power * strength)
+          .add(outward.multiplyScalar(4 * strength));
+
+        b.velocity.y += 2 * strength;
+
+        b.spin.set(
+          (Math.random() - .5) * 8,
+          (Math.random() - .5) * 8,
+          (Math.random() - .5) * 8
+        );
+
+        falling.push(b);
+      }
+    }
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(clock.getDelta(), .033);
+
+  for (const b of falling) {
+    b.velocity.y += gravity * dt;
+    b.mesh.position.addScaledVector(b.velocity, dt);
+
+    b.mesh.rotation.x += b.spin.x * dt;
+    b.mesh.rotation.y += b.spin.y * dt;
+    b.mesh.rotation.z += b.spin.z * dt;
+
+    if (b.mesh.position.y < floorY) {
+      b.mesh.position.y = floorY;
+      b.velocity.y *= -.25;
+      b.velocity.x *= .7;
+      b.velocity.z *= .7;
+      b.spin.multiplyScalar(.7);
+    }
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+</script>
+
+</body>
+</html>
